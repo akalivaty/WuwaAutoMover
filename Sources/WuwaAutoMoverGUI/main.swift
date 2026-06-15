@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     private let pathPreview = NSTextField(labelWithString: "")
     private let logView = NSTextView()
     private var actionButtons: [NSButton] = []
+    private var allButtons: [NSButton] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         loadSavedSettings()
@@ -28,14 +29,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
 
     private func buildWindow() {
         window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 900, height: 680),
+            contentRect: NSRect(x: 0, y: 0, width: 980, height: 760),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
         window.title = "WuwaAutoMover"
         window.center()
-        window.minSize = NSSize(width: 780, height: 560)
+        window.minSize = NSSize(width: 860, height: 680)
 
         let root = NSStackView()
         root.orientation = .vertical
@@ -55,17 +56,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         root.addArrangedSubview(subtitle)
 
         let form = NSGridView(views: [
-            [label("版本號"), versionField],
-            [label("外接硬碟名稱"), volumeField],
-            [label("外接資料夾"), externalRootField],
-            [label("App container ID"), containerField],
-            [label("WutheringWaves.app"), appPathField]
+            [label("版本號"), versionField, emptyView()],
+            [label("外接硬碟"), volumeField, makeButton(title: "選擇", symbol: "externaldrive", action: #selector(selectVolume))],
+            [label("外接資料夾"), externalRootField, makeButton(title: "選擇", symbol: "folder", action: #selector(selectExternalRoot))],
+            [label("WutheringWaves.app"), appPathField, makeButton(title: "選擇 App", symbol: "app", action: #selector(selectAppPath))],
+            [label("App container ID"), containerField, emptyView()]
         ])
         form.rowSpacing = 9
         form.columnSpacing = 12
         form.translatesAutoresizingMaskIntoConstraints = false
         form.column(at: 0).xPlacement = .trailing
-        form.column(at: 1).width = 560
+        form.column(at: 1).width = 600
+        form.column(at: 2).width = 120
         root.addArrangedSubview(form)
 
         for field in [versionField, volumeField, externalRootField, containerField, appPathField] {
@@ -85,31 +87,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         closedCheckBox.action = #selector(checkBoxChanged(_:))
         root.addArrangedSubview(closedCheckBox)
 
-        let buttonRow = NSStackView()
-        buttonRow.orientation = .horizontal
-        buttonRow.spacing = 10
-        buttonRow.alignment = .centerY
-        buttonRow.translatesAutoresizingMaskIntoConstraints = false
-
-        let statusButton = makeButton(title: "檢查狀態", symbol: "checklist", action: #selector(checkStatus))
-        let recommendedButton = makeButton(title: "1 推薦：Codesign + 連結版本", symbol: "1.circle", action: #selector(runRecommended))
-        let clientButton = makeButton(title: "2 整個 Client symlink", symbol: "2.circle", action: #selector(linkWholeClient))
-        let fallbackButton = makeButton(title: "3 保守雙路徑", symbol: "3.circle", action: #selector(createSymlinks))
-        let removeButton = makeButton(title: "移除 symlink", symbol: "link.badge.minus", action: #selector(removeSymlinks))
-        let codesignButton = makeButton(title: "Codesign App", symbol: "signature", action: #selector(runCodesign))
+        let statusRow = NSStackView()
+        statusRow.orientation = .horizontal
+        statusRow.spacing = 10
+        statusRow.alignment = .centerY
+        let statusButton = makeButton(title: "檢查目前狀態", symbol: "checklist", action: #selector(checkStatus))
         let openButton = makeButton(title: "打開外接資料夾", symbol: "folder", action: #selector(openExternalFolder))
+        let codesignButton = makeButton(title: "只執行 Codesign", symbol: "signature", action: #selector(runCodesign))
+        statusRow.addArrangedSubview(statusButton)
+        statusRow.addArrangedSubview(openButton)
+        statusRow.addArrangedSubview(codesignButton)
+        root.addArrangedSubview(statusRow)
+
+        let actionTitle = NSTextField(labelWithString: "依序選擇一個方案")
+        actionTitle.font = .systemFont(ofSize: 15, weight: .semibold)
+        root.addArrangedSubview(actionTitle)
+
+        let recommendedButton = makeButton(title: "執行選項 1", symbol: "1.circle.fill", action: #selector(runRecommended))
+        let clientButton = makeButton(title: "執行選項 2", symbol: "2.circle.fill", action: #selector(linkWholeClient))
+        let fallbackButton = makeButton(title: "執行選項 3", symbol: "3.circle.fill", action: #selector(createSymlinks))
+        let removeButton = makeButton(title: "移除 symlink", symbol: "link.badge.minus", action: #selector(removeSymlinks))
+
+        let actionList = NSStackView()
+        actionList.orientation = .vertical
+        actionList.alignment = .leading
+        actionList.spacing = 8
+        actionList.addArrangedSubview(actionRow(
+            title: "1. 推薦：安裝完 App 後先 Codesign，再只連結資源版本資料夾",
+            detail: "適合全新安裝或已確認 app 不在 sandbox。通常不需要處理 container 路徑。",
+            button: recommendedButton
+        ))
+        actionList.addArrangedSubview(actionRow(
+            title: "2. 第二選擇：把整個 ~/Library/Client 指到外接硬碟",
+            detail: "比較省事，但移動的不只是下載資源。請先完成 codesign 並關閉遊戲。",
+            button: clientButton
+        ))
+        actionList.addArrangedSubview(actionRow(
+            title: "3. 最保守：同時處理 container 與 ~/Library 兩條資源路徑",
+            detail: "不知道目前遊戲走哪條路徑、或 App Store 更新後恢復 sandbox 時再用。",
+            button: fallbackButton
+        ))
+        actionList.addArrangedSubview(actionRow(
+            title: "清理：移除目前建立的 symlink",
+            detail: "只移除本機入口 symlink 並重建空資料夾，不刪外接硬碟資料。",
+            button: removeButton
+        ))
+        root.addArrangedSubview(actionList)
 
         recommendedButton.toolTip = "先 codesign，再只把 ~/Library/Client/Saved/Resources/<版本> 指到外接硬碟。"
         clientButton.toolTip = "把整個 ~/Library/Client 指到外接硬碟。"
         fallbackButton.toolTip = "先同步既有本機資源，再把 container 與 ~/Library 兩個入口都改成 symlink。"
         removeButton.toolTip = "只移除兩個入口的 symlink 並重建空資料夾，不刪外接硬碟資料。"
-        codesignButton.toolTip = "以管理員授權執行 codesign，處理遊戲啟動時的儲存錯誤。"
+        codesignButton.toolTip = "以管理員授權執行 codesign。"
 
         actionButtons = [recommendedButton, clientButton, fallbackButton, removeButton, codesignButton]
-        for button in [statusButton, recommendedButton, clientButton, fallbackButton, removeButton, codesignButton, openButton] {
-            buttonRow.addArrangedSubview(button)
-        }
-        root.addArrangedSubview(buttonRow)
 
         let logLabel = NSTextField(labelWithString: "執行記錄")
         logLabel.font = .systemFont(ofSize: 13, weight: .medium)
@@ -118,6 +149,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         logView.isEditable = false
         logView.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
         logView.textContainerInset = NSSize(width: 8, height: 8)
+        logView.drawsBackground = true
+        logView.backgroundColor = .textBackgroundColor
+        logView.textColor = .labelColor
 
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = true
@@ -155,7 +189,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             button.image = image
             button.imagePosition = .imageLeading
         }
+        allButtons.append(button)
         return button
+    }
+
+    private func emptyView() -> NSView {
+        let view = NSView()
+        view.translatesAutoresizingMaskIntoConstraints = false
+        return view
+    }
+
+    private func actionRow(title: String, detail: String, button: NSButton) -> NSView {
+        let row = NSStackView()
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 12
+        row.translatesAutoresizingMaskIntoConstraints = false
+
+        button.setContentHuggingPriority(.required, for: .horizontal)
+
+        let textStack = NSStackView()
+        textStack.orientation = .vertical
+        textStack.alignment = .leading
+        textStack.spacing = 2
+
+        let titleLabel = NSTextField(labelWithString: title)
+        titleLabel.font = .systemFont(ofSize: 13, weight: .medium)
+
+        let detailLabel = NSTextField(wrappingLabelWithString: detail)
+        detailLabel.font = .systemFont(ofSize: 12)
+        detailLabel.textColor = .secondaryLabelColor
+
+        textStack.addArrangedSubview(titleLabel)
+        textStack.addArrangedSubview(detailLabel)
+
+        row.addArrangedSubview(button)
+        row.addArrangedSubview(textStack)
+
+        NSLayoutConstraint.activate([
+            textStack.widthAnchor.constraint(greaterThanOrEqualToConstant: 620)
+        ])
+
+        return row
     }
 
     private func loadSavedSettings() {
@@ -203,6 +278,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
 
     @objc private func checkBoxChanged(_ sender: Any) {
         updateMutationButtons()
+    }
+
+    @objc private func selectVolume() {
+        let panel = NSOpenPanel()
+        panel.title = "選擇外接硬碟"
+        panel.message = "請選擇 /Volumes 底下的外接硬碟。"
+        panel.directoryURL = URL(fileURLWithPath: "/Volumes")
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        if panel.runModal() == .OK, let url = panel.url {
+            volumeField.stringValue = url.lastPathComponent
+            refreshPathPreview()
+            saveCurrentConfigIfValid()
+        }
+    }
+
+    @objc private func selectExternalRoot() {
+        let panel = NSOpenPanel()
+        panel.title = "選擇外接資料夾"
+        panel.message = "請選擇外接硬碟上要存放 Wuwa 資料的資料夾。"
+        panel.directoryURL = volumeField.stringValue.isEmpty ? URL(fileURLWithPath: "/Volumes") : URL(fileURLWithPath: "/Volumes/\(volumeField.stringValue)")
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        if panel.runModal() == .OK, let url = panel.url {
+            applyExternalRoot(url.path)
+            refreshPathPreview()
+            saveCurrentConfigIfValid()
+        }
+    }
+
+    @objc private func selectAppPath() {
+        let panel = NSOpenPanel()
+        panel.title = "選擇 WutheringWaves.app"
+        panel.message = "請選擇 App Store 安裝的 WutheringWaves.app。"
+        panel.directoryURL = volumeField.stringValue.isEmpty ? URL(fileURLWithPath: "/Applications") : URL(fileURLWithPath: "/Volumes/\(volumeField.stringValue)/Applications")
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.applicationBundle]
+        if panel.runModal() == .OK, let url = panel.url {
+            appPathField.stringValue = url.path
+            readContainerIDFromSelectedApp(showErrorOnFailure: false)
+            refreshPathPreview()
+            saveCurrentConfigIfValid()
+        }
     }
 
     @objc private func checkStatus() {
@@ -265,6 +388,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             appContainerID: containerField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines),
             appPath: appPathField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         )
+    }
+
+    private func applyExternalRoot(_ path: String) {
+        let components = path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        guard components.count >= 2, components[0] == "Volumes" else {
+            externalRootField.stringValue = path
+            return
+        }
+        volumeField.stringValue = components[1]
+        if components.count > 2 {
+            externalRootField.stringValue = components.dropFirst(2).joined(separator: "/")
+        } else {
+            externalRootField.stringValue = ""
+        }
+    }
+
+    private func readContainerIDFromSelectedApp(showErrorOnFailure: Bool) {
+        let appPath = appPathField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !appPath.isEmpty else {
+            if showErrorOnFailure {
+                showError(WuwaError("請先選擇 WutheringWaves.app。"))
+            }
+            return
+        }
+
+        let infoPlist = URL(fileURLWithPath: appPath).appendingPathComponent("Contents/Info.plist")
+        guard let info = NSDictionary(contentsOf: infoPlist),
+              let bundleID = info["CFBundleIdentifier"] as? String,
+              !bundleID.isEmpty
+        else {
+            if showErrorOnFailure {
+                showError(WuwaError("無法從 App 讀取 CFBundleIdentifier：\(infoPlist.path)"))
+            }
+            return
+        }
+
+        containerField.stringValue = bundleID
+        refreshPathPreview()
+        saveCurrentConfigIfValid()
     }
 
     private func refreshPathPreview() {
@@ -338,10 +500,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         for button in actionButtons {
             button.isEnabled = enabled && closedCheckBox.state == .on
         }
+        for button in allButtons where !actionButtons.contains(button) {
+            button.isEnabled = enabled
+        }
     }
 
     private func appendLog(_ text: String) {
-        logView.textStorage?.append(NSAttributedString(string: text + "\n"))
+        let attributes: [NSAttributedString.Key: Any] = [
+            .foregroundColor: NSColor.labelColor,
+            .font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        ]
+        logView.textStorage?.append(NSAttributedString(string: text + "\n", attributes: attributes))
         logView.scrollToEndOfDocument(nil)
     }
 

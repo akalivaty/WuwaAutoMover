@@ -1,6 +1,10 @@
-# WuwaAutoMover
+# WuwaAutoMover (Work in progress, not released yet)
+
+![WuwaAutoMover GUI](./assets/gui_preview.png)
 
 WuwaAutoMover is a native macOS GUI app and command line tool for moving Wuthering Waves resource data to an external disk.
+
+You can refer to this [repo](https://github.com/akalivaty/move_wuwa_to_extenal_disk_on_mac) and this tool will practice this process automatically.
 
 It supports the three workflows described in the root README:
 
