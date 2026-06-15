@@ -1,88 +1,205 @@
 # WuwaAutoMover
 
-WuwaAutoMover is a native macOS GUI app and command line tool for moving Wuthering Waves resource folders to an external disk.
+WuwaAutoMover is a native macOS GUI app and command line tool for moving Wuthering Waves resource data to an external disk.
 
-It follows the root README workflow:
+It supports the three workflows described in the root README:
 
-- Prepare `/Volumes/<volume>/<external-root>/Resources/<version>`.
-- Sync existing local resource folders to the external target.
-- Replace both local resource entries with symlinks to the same external target.
-- Check current status.
-- Remove symlinks without deleting external data.
-- Run `codesign` for `WutheringWaves.app` when the game reports a storage or patch-list error.
+1. **Recommended**: codesign the App Store app first, then link only `~/Library/Client/Saved/Resources/<version>`.
+2. **Second choice**: link the whole `~/Library/Client` folder to the external disk.
+3. **Conservative fallback**: link both the sandbox container resource path and the `~/Library/Client` resource path.
 
-## Why Swift
+Settings are saved after you enter them, so you do not need to retype your volume and paths every time.
 
-This tool is macOS-only and needs native access to AppKit, `.app` bundles, `/Volumes`, `~/Library`, and AppleScript administrator prompts. Swift keeps the GUI, CLI, and macOS integration in one toolchain. Rust would be a good choice for a cross-platform CLI, but it adds more packaging and GUI bridge work for this specific app.
+## Install
 
-## Build
+### GUI App With Homebrew Cask
 
-From the repo root:
+After publishing the cask to a tap:
 
 ```shell
-./scripts/build_wuwa_auto_mover.sh
+brew tap OWNER/REPO
+brew install --cask wuwa-auto-mover
+```
+
+For local testing from this repository:
+
+```shell
+brew install --cask ./packaging/homebrew/wuwa-auto-mover-cask.rb
+```
+
+The cask installs:
+
+- `WuwaAutoMover.app`
+- `wuwa-auto-mover` CLI symlink from the app bundle
+
+### CLI With Homebrew Formula
+
+After publishing the formula to a tap:
+
+```shell
+brew tap OWNER/REPO
+brew install wuwa-auto-mover
+```
+
+For local testing from this repository:
+
+```shell
+brew install ./packaging/homebrew/wuwa-auto-mover.rb
+```
+
+### Build From Source
+
+From `WuwaAutoMover/`:
+
+```shell
+swift build -c release
+```
+
+From the repo root, to package both outputs:
+
+```shell
+./WuwaAutoMover/scripts/build_wuwa_auto_mover.sh
 ```
 
 Outputs:
 
-- `build/WuwaAutoMover.app`
-- `build/wuwa-auto-mover`
+- `WuwaAutoMover/build/WuwaAutoMover.app`
+- `WuwaAutoMover/build/wuwa-auto-mover`
 
 Open the GUI:
 
 ```shell
-open build/WuwaAutoMover.app
+open WuwaAutoMover/build/WuwaAutoMover.app
 ```
 
-## CLI
+## GUI Usage
+
+Fill in your own values. The text shown in the fields is only a placeholder example, not a default.
+
+Required settings:
+
+- Resource version, for example `3.4.0`
+- External volume name under `/Volumes`, for example `T7`
+- External root folder under that volume, for example `WuwaData`
+- App container ID, for example `com.kurogame.wutheringwaves.global`
+- Absolute path to `WutheringWaves.app`, for example `/Volumes/T7/Applications/WutheringWaves.app`
+
+The GUI has three main actions:
+
+- `1 推薦：Codesign + 連結版本`
+- `2 整個 Client symlink`
+- `3 保守雙路徑`
+
+Before running any action that changes files, fully close Wuthering Waves, Launcher, App Store, and active downloader processes, then tick the confirmation checkbox.
+
+## CLI Usage
 
 Show help:
 
 ```shell
-./build/wuwa-auto-mover --help
+wuwa-auto-mover --help
 ```
 
-Check status:
+Save settings first:
 
 ```shell
-./build/wuwa-auto-mover status --version 3.2.0 --volume T7
+wuwa-auto-mover config \
+  --version 3.4.0 \
+  --volume T7 \
+  --external-root WuwaData \
+  --container-id com.kurogame.wutheringwaves.global \
+  --app-path "/Volumes/T7/Applications/WutheringWaves.app"
 ```
 
-Create or update symlinks:
+These examples are placeholders. Use your own volume name and paths.
+
+Saved settings are stored at:
+
+```text
+~/Library/Application Support/WuwaAutoMover/config.json
+```
+
+After settings are saved, later commands can omit those options unless you want to override them.
+
+### Option 1: Recommended
+
+Codesign the app, then link only:
+
+```text
+~/Library/Client/Saved/Resources/<version>
+```
+
+Run:
 
 ```shell
-./build/wuwa-auto-mover link --yes --version 3.2.0 --volume T7
+wuwa-auto-mover recommended --yes --admin
+```
+
+Use `--admin` if codesign needs a macOS administrator prompt.
+
+### Option 2: Whole Client Symlink
+
+Link the whole `~/Library/Client` folder:
+
+```shell
+wuwa-auto-mover link-client --yes
+```
+
+This is convenient after the app has been re-signed and is no longer sandboxed, but it moves more than just downloaded resources.
+
+### Option 3: Conservative Fallback
+
+Link both possible resource version paths:
+
+```shell
+wuwa-auto-mover fallback-link --yes
+```
+
+Use this if the app still has the sandbox entitlement, you already launched the game before codesigning, or you are unsure which path the game is currently using.
+
+### Other Commands
+
+Check current paths:
+
+```shell
+wuwa-auto-mover status
+```
+
+Only codesign the app:
+
+```shell
+wuwa-auto-mover codesign --admin
+```
+
+Inspect app entitlements:
+
+```shell
+wuwa-auto-mover entitlements
 ```
 
 Remove symlinks without deleting external data:
 
 ```shell
-./build/wuwa-auto-mover unlink --yes --version 3.2.0 --volume T7
+wuwa-auto-mover unlink --yes
 ```
 
-Run codesign with a macOS administrator prompt:
+## CLI Options
 
-```shell
-./build/wuwa-auto-mover codesign --admin --app-path "/Volumes/T7/Applications/WutheringWaves.app"
-```
+- `--version <value>`: resource version, for example `3.4.0`
+- `--volume <name>`: external volume name under `/Volumes`, for example `T7`
+- `--external-root <path>`: folder under the external volume, for example `WuwaData`
+- `--container-id <id>`: App Store container ID, for example `com.kurogame.wutheringwaves.global`
+- `--app-path <path>`: absolute path to `WutheringWaves.app`
+- `--yes`: required for operations that change local symlinks or folders
+- `--admin`: use macOS administrator prompt for codesign
 
-`link` and `unlink` require `--yes` because they modify local resource entries. Close Wuthering Waves, Launcher, App Store, and active downloader processes before running them.
+Options passed to any command override saved settings and are saved for future runs.
 
-## Options
-
-- `--version <value>`: Wuthering Waves resource version. Default: `3.2.0`.
-- `--volume <name>`: External volume name under `/Volumes`. Default: `T7`.
-- `--external-root <path>`: Folder under the external volume. Default: `WuwaData`.
-- `--container-id <id>`: App container ID. Default: `com.kurogame.wutheringwaves.global`.
-- `--app-path <path>`: `WutheringWaves.app` path for codesign.
-- `--yes`: Required for `link` and `unlink`.
-- `--admin`: Use a macOS administrator prompt for `codesign`.
-
-## Homebrew
+## Homebrew Templates
 
 Templates are under `packaging/homebrew/`:
 
-- `wuwa-auto-mover.rb`: Formula for the CLI.
-- `wuwa-auto-mover-cask.rb`: Cask for `WuwaAutoMover.app`, including a `wuwa-auto-mover` binary symlink from the app bundle.
+- `wuwa-auto-mover.rb`: formula for the CLI
+- `wuwa-auto-mover-cask.rb`: cask for `WuwaAutoMover.app`, including the `wuwa-auto-mover` binary symlink from the app bundle
 
 Before publishing, replace `OWNER/REPO` and the placeholder `sha256` values with the real release URL and checksums.

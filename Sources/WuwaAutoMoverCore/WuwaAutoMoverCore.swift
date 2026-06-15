@@ -1,5 +1,62 @@
 import Foundation
 
+public struct WuwaStoredSettings: Codable, Sendable {
+    public var version: String
+    public var volumeName: String
+    public var externalRoot: String
+    public var appContainerID: String
+    public var appPath: String
+
+    public init(
+        version: String = "",
+        volumeName: String = "",
+        externalRoot: String = "",
+        appContainerID: String = "",
+        appPath: String = ""
+    ) {
+        self.version = version
+        self.volumeName = volumeName
+        self.externalRoot = externalRoot
+        self.appContainerID = appContainerID
+        self.appPath = appPath
+    }
+}
+
+public struct WuwaPlaceholders: Sendable {
+    public static let version = "3.4.0"
+    public static let volumeName = "T7"
+    public static let externalRoot = "WuwaData"
+    public static let appContainerID = "com.kurogame.wutheringwaves.global"
+    public static let appPath = "/Volumes/T7/Applications/WutheringWaves.app"
+}
+
+public final class WuwaSettingsStore: @unchecked Sendable {
+    private let fileManager: FileManager
+    public let configURL: URL
+
+    public init(fileManager: FileManager = .default) {
+        self.fileManager = fileManager
+        let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
+        self.configURL = appSupport.appendingPathComponent("WuwaAutoMover/config.json")
+    }
+
+    public func load() -> WuwaStoredSettings {
+        guard let data = try? Data(contentsOf: configURL),
+              let settings = try? JSONDecoder().decode(WuwaStoredSettings.self, from: data)
+        else {
+            return WuwaStoredSettings()
+        }
+        return settings
+    }
+
+    public func save(_ settings: WuwaStoredSettings) throws {
+        try fileManager.createDirectory(at: configURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let data = try JSONEncoder().encode(settings)
+        try data.write(to: configURL, options: [.atomic])
+    }
+}
+
 public struct WuwaConfig: Sendable {
     public let version: String
     public let volumeName: String
@@ -9,10 +66,10 @@ public struct WuwaConfig: Sendable {
 
     public init(
         version: String,
-        volumeName: String = "T7",
-        externalRoot: String = "WuwaData",
-        appContainerID: String = "com.kurogame.wutheringwaves.global",
-        appPath: String = "/Volumes/T7/Applications/WutheringWaves.app"
+        volumeName: String,
+        externalRoot: String,
+        appContainerID: String,
+        appPath: String
     ) throws {
         try WuwaConfig.validatePathComponent(version, name: "版本號")
         try WuwaConfig.validatePathComponent(volumeName, name: "外接硬碟名稱")
@@ -37,6 +94,10 @@ public struct WuwaConfig: Sendable {
         "\(externalBase)/\(version)"
     }
 
+    public var externalClient: String {
+        "/Volumes/\(volumeName)/\(externalRoot)/Client"
+    }
+
     public var source1Base: String {
         "\(NSHomeDirectory())/Library/Containers/\(appContainerID)/Data/Library/Client/Saved/Resources"
     }
@@ -45,8 +106,22 @@ public struct WuwaConfig: Sendable {
         "\(NSHomeDirectory())/Library/Client/Saved/Resources"
     }
 
+    public var userClient: String {
+        "\(NSHomeDirectory())/Library/Client"
+    }
+
     public var source1: String {
         "\(source1Base)/\(version)"
+    }
+
+    public var storedSettings: WuwaStoredSettings {
+        WuwaStoredSettings(
+            version: version,
+            volumeName: volumeName,
+            externalRoot: externalRoot,
+            appContainerID: appContainerID,
+            appPath: appPath
+        )
     }
 
     public var source2: String {
@@ -84,6 +159,8 @@ public struct WuwaStatus: Sendable {
     public let volumeExists: Bool
     public let externalTargetExists: Bool
     public let externalTargetSize: String?
+    public let externalClientExists: Bool
+    public let sandboxEntitlementPresent: Bool?
     public let entries: [PathStatus]
 }
 
@@ -122,39 +199,114 @@ public final class WuwaMover {
         let volumeExists = fileManager.fileExists(atPath: "/Volumes/\(config.volumeName)")
         let externalTargetExists = fileManager.fileExists(atPath: config.externalTarget)
         let size = externalTargetExists ? try? runProcess("/usr/bin/du", arguments: ["-sh", config.externalTarget]) : nil
+        let entitlements = try? inspectEntitlements(config: config)
         return WuwaStatus(
             config: config,
             volumeExists: volumeExists,
             externalTargetExists: externalTargetExists,
             externalTargetSize: size?.trimmingCharacters(in: .whitespacesAndNewlines),
+            externalClientExists: fileManager.fileExists(atPath: config.externalClient),
+            sandboxEntitlementPresent: entitlements?.contains("com.apple.security.app-sandbox"),
             entries: [
                 pathStatus(config.source1, label: "Container 路徑"),
-                pathStatus(config.source2, label: "使用者 Library 路徑")
+                pathStatus(config.source2, label: "使用者 Library 資源版本路徑"),
+                pathStatus(config.userClient, label: "使用者 Library Client 路徑")
             ]
         )
     }
 
-    public func createOrUpdateSymlinks(config: WuwaConfig) throws -> OperationResult {
+    public func createRecommendedSetup(config: WuwaConfig, administratorPrivileges: Bool) throws -> OperationResult {
+        var lines: [String] = []
+        lines.append("選項 1：先 Codesign，再連結使用者 Library 資源版本資料夾")
+        lines.append(try codesignApp(config: config, administratorPrivileges: administratorPrivileges).text)
+        lines.append(try createUserResourceVersionSymlink(config: config).text)
+        lines.append("✅ 選項 1 完成。通常不需要再處理 container 路徑。")
+        return OperationResult(lines)
+    }
+
+    public func createUserResourceVersionSymlink(config: WuwaConfig) throws -> OperationResult {
         try ensureVolumeExists(config)
 
         var lines: [String] = []
+        lines.append("建立必要資料夾")
+        try fileManager.createDirectory(atPath: config.externalTarget, withIntermediateDirectories: true)
+        try fileManager.createDirectory(atPath: config.source2Base, withIntermediateDirectories: true)
+        lines.append("✅ 外接版本資料夾已準備完成：\(config.externalTarget)")
+        lines.append("✅ 使用者 Library Resources 資料夾已準備完成：\(config.source2Base)")
+
+        lines.append(try syncIfRealDirectory(config.source2, label: "使用者 Library 資源版本路徑", destination: config.externalTarget))
+        lines.append(try replaceWithSymlink(config.source2, label: "使用者 Library 資源版本路徑", destination: config.externalTarget))
+
+        lines.append("")
+        lines.append("驗證結果")
+        lines.append(verifyPath(config.source2, label: "使用者 Library 資源版本路徑", expectedTarget: config.externalTarget))
+        lines.append("✅ 完成。現在可以開遊戲測試。")
+        return OperationResult(lines)
+    }
+
+    public func createClientSymlink(config: WuwaConfig) throws -> OperationResult {
+        try ensureVolumeExists(config)
+
+        var lines: [String] = []
+        lines.append("選項 2：把整個 ~/Library/Client 做成 symlink")
+        try fileManager.createDirectory(atPath: config.externalClient, withIntermediateDirectories: true)
+        lines.append("✅ 外接 Client 資料夾已準備完成：\(config.externalClient)")
+
+        if isSymlink(config.userClient) {
+            let currentTarget = try fileManager.destinationOfSymbolicLink(atPath: config.userClient)
+            if currentTarget == config.externalClient {
+                lines.append("✅ ~/Library/Client 已正確指向 \(config.externalClient)")
+                return OperationResult(lines)
+            }
+            try fileManager.removeItem(atPath: config.userClient)
+            try fileManager.createSymbolicLink(atPath: config.userClient, withDestinationPath: config.externalClient)
+            lines.append("⚠️ ~/Library/Client 是舊 symlink，已重建")
+            return OperationResult(lines)
+        }
+
+        var isDirectory: ObjCBool = false
+        if fileManager.fileExists(atPath: config.userClient, isDirectory: &isDirectory), isDirectory.boolValue {
+            lines.append(try syncDirectory(config.userClient, destination: config.externalClient, label: "~/Library/Client"))
+            let backup = backupPath(for: config.userClient)
+            try fileManager.moveItem(atPath: config.userClient, toPath: backup)
+            lines.append("✅ 原本的 ~/Library/Client 已搬到備份：\(backup)")
+        } else if fileManager.fileExists(atPath: config.userClient) {
+            throw WuwaError("~/Library/Client 存在但不是資料夾或 symlink，請先手動處理：\(config.userClient)")
+        }
+
+        let parent = (config.userClient as NSString).deletingLastPathComponent
+        try fileManager.createDirectory(atPath: parent, withIntermediateDirectories: true)
+        try fileManager.createSymbolicLink(atPath: config.userClient, withDestinationPath: config.externalClient)
+        lines.append("✅ ~/Library/Client 已建立 symlink -> \(config.externalClient)")
+        return OperationResult(lines)
+    }
+
+    public func createConservativeFallbackSymlinks(config: WuwaConfig) throws -> OperationResult {
+        try ensureVolumeExists(config)
+
+        var lines: [String] = []
+        lines.append("選項 3：最保守備援方法，同時處理 container 與使用者 Library 路徑")
         lines.append("建立必要資料夾")
         try fileManager.createDirectory(atPath: config.externalTarget, withIntermediateDirectories: true)
         try fileManager.createDirectory(atPath: config.source1Base, withIntermediateDirectories: true)
         try fileManager.createDirectory(atPath: config.source2Base, withIntermediateDirectories: true)
         lines.append("✅ 外接目標資料夾已準備完成")
 
-        lines.append(try syncIfRealDirectory(config.source1, label: "Container 路徑", config: config))
-        lines.append(try syncIfRealDirectory(config.source2, label: "使用者 Library 路徑", config: config))
-        lines.append(try replaceWithSymlink(config.source1, label: "Container 路徑", config: config))
-        lines.append(try replaceWithSymlink(config.source2, label: "使用者 Library 路徑", config: config))
+        lines.append(try syncIfRealDirectory(config.source1, label: "Container 路徑", destination: config.externalTarget))
+        lines.append(try syncIfRealDirectory(config.source2, label: "使用者 Library 資源版本路徑", destination: config.externalTarget))
+        lines.append(try replaceWithSymlink(config.source1, label: "Container 路徑", destination: config.externalTarget))
+        lines.append(try replaceWithSymlink(config.source2, label: "使用者 Library 資源版本路徑", destination: config.externalTarget))
 
         lines.append("")
         lines.append("驗證結果")
-        lines.append(verifyPath(config.source1, label: "Container 路徑", config: config))
-        lines.append(verifyPath(config.source2, label: "使用者 Library 路徑", config: config))
+        lines.append(verifyPath(config.source1, label: "Container 路徑", expectedTarget: config.externalTarget))
+        lines.append(verifyPath(config.source2, label: "使用者 Library 資源版本路徑", expectedTarget: config.externalTarget))
         lines.append("✅ 完成。現在可以開遊戲測試。")
         return OperationResult(lines)
+    }
+
+    public func createOrUpdateSymlinks(config: WuwaConfig) throws -> OperationResult {
+        try createConservativeFallbackSymlinks(config: config)
     }
 
     public func removeSymlinks(config: WuwaConfig) throws -> OperationResult {
@@ -183,12 +335,23 @@ public final class WuwaMover {
         return OperationResult(["✅ codesign 已完成。", output].filter { !$0.isEmpty })
     }
 
+    public func inspectEntitlements(config: WuwaConfig) throws -> String {
+        try runProcess("/usr/bin/codesign", arguments: ["-d", "--entitlements", ":-", config.appPath])
+    }
+
     public func describe(status: WuwaStatus) -> String {
         var lines: [String] = []
         lines.append("版本號：\(status.config.version)")
         lines.append("外接目標：\(status.config.externalTarget)")
+        lines.append("外接 Client：\(status.config.externalClient)")
         lines.append(status.volumeExists ? "✅ 已找到外接硬碟：/Volumes/\(status.config.volumeName)" : "❌ 找不到外接硬碟：/Volumes/\(status.config.volumeName)")
         lines.append(status.externalTargetExists ? "✅ 外接目標存在" : "⚠️ 外接目標不存在")
+        lines.append(status.externalClientExists ? "✅ 外接 Client 存在" : "⚠️ 外接 Client 不存在")
+        if let sandboxEntitlementPresent = status.sandboxEntitlementPresent {
+            lines.append(sandboxEntitlementPresent ? "⚠️ app sandbox entitlement 仍然存在" : "✅ app sandbox entitlement 不存在")
+        } else {
+            lines.append("⚠️ 無法檢查 app entitlements")
+        }
         if let size = status.externalTargetSize {
             lines.append("外接目標容量：\(size)")
         }
@@ -211,7 +374,7 @@ public final class WuwaMover {
         }
     }
 
-    private func syncIfRealDirectory(_ source: String, label: String, config: WuwaConfig) throws -> String {
+    private func syncIfRealDirectory(_ source: String, label: String, destination: String) throws -> String {
         if isSymlink(source) {
             return "⚠️ \(label) 已經是 symlink，略過同步"
         }
@@ -221,18 +384,22 @@ public final class WuwaMover {
             return "⚠️ \(label) 不存在，略過同步"
         }
 
-        let output = try runProcess("/usr/bin/rsync", arguments: ["-avh", source + "/", config.externalTarget + "/"])
-        return "同步 \(label) 到外接硬碟\n\(output)\n✅ \(label) 已同步到 \(config.externalTarget)"
+        return try syncDirectory(source, destination: destination, label: label)
     }
 
-    private func replaceWithSymlink(_ source: String, label: String, config: WuwaConfig) throws -> String {
+    private func syncDirectory(_ source: String, destination: String, label: String) throws -> String {
+        let output = try runProcess("/usr/bin/rsync", arguments: ["-avh", source + "/", destination + "/"])
+        return "同步 \(label) 到外接硬碟\n\(output)\n✅ \(label) 已同步到 \(destination)"
+    }
+
+    private func replaceWithSymlink(_ source: String, label: String, destination: String) throws -> String {
         if isSymlink(source) {
             let currentTarget = try fileManager.destinationOfSymbolicLink(atPath: source)
-            if currentTarget == config.externalTarget {
-                return "✅ \(label) 已正確指向 \(config.externalTarget)"
+            if currentTarget == destination {
+                return "✅ \(label) 已正確指向 \(destination)"
             }
             try fileManager.removeItem(atPath: source)
-            try fileManager.createSymbolicLink(atPath: source, withDestinationPath: config.externalTarget)
+            try fileManager.createSymbolicLink(atPath: source, withDestinationPath: destination)
             return "⚠️ \(label) 是舊 symlink，已重建"
         }
 
@@ -240,7 +407,9 @@ public final class WuwaMover {
             try fileManager.removeItem(atPath: source)
         }
 
-        try fileManager.createSymbolicLink(atPath: source, withDestinationPath: config.externalTarget)
+        let parent = (source as NSString).deletingLastPathComponent
+        try fileManager.createDirectory(atPath: parent, withIntermediateDirectories: true)
+        try fileManager.createSymbolicLink(atPath: source, withDestinationPath: destination)
         return "✅ \(label) 已建立 symlink"
     }
 
@@ -268,10 +437,10 @@ public final class WuwaMover {
         return "✅ \(label) 原本不存在，已建立空資料夾"
     }
 
-    private func verifyPath(_ path: String, label: String, config: WuwaConfig) -> String {
+    private func verifyPath(_ path: String, label: String, expectedTarget: String) -> String {
         if isSymlink(path) {
             let target = (try? fileManager.destinationOfSymbolicLink(atPath: path)) ?? "<讀取失敗>"
-            if target == config.externalTarget {
+            if target == expectedTarget {
                 return "✅ \(label) 正常 -> \(target)"
             }
             return "⚠️ \(label) 是 symlink，但指向 \(target)"
@@ -304,6 +473,12 @@ public final class WuwaMover {
 
     private func isSymlink(_ path: String) -> Bool {
         (try? fileManager.destinationOfSymbolicLink(atPath: path)) != nil
+    }
+
+    private func backupPath(for path: String) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        return "\(path).old.\(formatter.string(from: Date()))"
     }
 }
 

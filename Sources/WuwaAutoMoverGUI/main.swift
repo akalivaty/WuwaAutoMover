@@ -2,22 +2,24 @@ import Cocoa
 import WuwaAutoMoverCore
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     private var window: NSWindow!
-    private let versionField = NSTextField(string: "3.2.0")
-    private let volumeField = NSTextField(string: "T7")
-    private let externalRootField = NSTextField(string: "WuwaData")
-    private let containerField = NSTextField(string: "com.kurogame.wutheringwaves.global")
-    private let appPathField = NSTextField(string: "/Volumes/T7/Applications/WutheringWaves.app")
+    private let settingsStore = WuwaSettingsStore()
+    private let versionField = NSTextField(string: "")
+    private let volumeField = NSTextField(string: "")
+    private let externalRootField = NSTextField(string: "")
+    private let containerField = NSTextField(string: "")
+    private let appPathField = NSTextField(string: "")
     private let closedCheckBox = NSButton(checkboxWithTitle: "我已完全關閉鳴潮、Launcher、App Store 與下載程序", target: nil, action: nil)
     private let pathPreview = NSTextField(labelWithString: "")
     private let logView = NSTextView()
     private var actionButtons: [NSButton] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        loadSavedSettings()
         buildWindow()
         refreshPathPreview()
-        appendLog("WuwaAutoMover 已啟動。請先確認設定，再執行檢查或轉移。")
+        appendLog("WuwaAutoMover 已啟動。請先輸入或確認設定，設定會自動記住。")
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -47,7 +49,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         title.font = .systemFont(ofSize: 24, weight: .semibold)
         root.addArrangedSubview(title)
 
-        let subtitle = NSTextField(wrappingLabelWithString: "把鳴潮兩個本機資源入口同步到外接硬碟，並改成指向同一個版本資料夾的 symlink。")
+        let subtitle = NSTextField(wrappingLabelWithString: "建議先 codesign 讓 App Store 版離開 sandbox，再只處理 ~/Library/Client。若不確定目前路徑，最後再使用保守雙路徑方法。")
         subtitle.font = .systemFont(ofSize: 13)
         subtitle.textColor = .secondaryLabelColor
         root.addArrangedSubview(subtitle)
@@ -67,6 +69,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         root.addArrangedSubview(form)
 
         for field in [versionField, volumeField, externalRootField, containerField, appPathField] {
+            field.placeholderString = placeholder(for: field)
+            field.delegate = self
             field.target = self
             field.action = #selector(fieldChanged(_:))
         }
@@ -88,17 +92,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         buttonRow.translatesAutoresizingMaskIntoConstraints = false
 
         let statusButton = makeButton(title: "檢查狀態", symbol: "checklist", action: #selector(checkStatus))
-        let createButton = makeButton(title: "建立 / 更新 symlink", symbol: "link", action: #selector(createSymlinks))
+        let recommendedButton = makeButton(title: "1 推薦：Codesign + 連結版本", symbol: "1.circle", action: #selector(runRecommended))
+        let clientButton = makeButton(title: "2 整個 Client symlink", symbol: "2.circle", action: #selector(linkWholeClient))
+        let fallbackButton = makeButton(title: "3 保守雙路徑", symbol: "3.circle", action: #selector(createSymlinks))
         let removeButton = makeButton(title: "移除 symlink", symbol: "link.badge.minus", action: #selector(removeSymlinks))
         let codesignButton = makeButton(title: "Codesign App", symbol: "signature", action: #selector(runCodesign))
         let openButton = makeButton(title: "打開外接資料夾", symbol: "folder", action: #selector(openExternalFolder))
 
-        createButton.toolTip = "先同步既有本機資源，再把兩個入口改成 symlink。"
+        recommendedButton.toolTip = "先 codesign，再只把 ~/Library/Client/Saved/Resources/<版本> 指到外接硬碟。"
+        clientButton.toolTip = "把整個 ~/Library/Client 指到外接硬碟。"
+        fallbackButton.toolTip = "先同步既有本機資源，再把 container 與 ~/Library 兩個入口都改成 symlink。"
         removeButton.toolTip = "只移除兩個入口的 symlink 並重建空資料夾，不刪外接硬碟資料。"
         codesignButton.toolTip = "以管理員授權執行 codesign，處理遊戲啟動時的儲存錯誤。"
 
-        actionButtons = [createButton, removeButton, codesignButton]
-        for button in [statusButton, createButton, removeButton, codesignButton, openButton] {
+        actionButtons = [recommendedButton, clientButton, fallbackButton, removeButton, codesignButton]
+        for button in [statusButton, recommendedButton, clientButton, fallbackButton, removeButton, codesignButton, openButton] {
             buttonRow.addArrangedSubview(button)
         }
         root.addArrangedSubview(buttonRow)
@@ -150,6 +158,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return button
     }
 
+    private func loadSavedSettings() {
+        let settings = settingsStore.load()
+        versionField.stringValue = settings.version
+        volumeField.stringValue = settings.volumeName
+        externalRootField.stringValue = settings.externalRoot
+        containerField.stringValue = settings.appContainerID
+        appPathField.stringValue = settings.appPath
+    }
+
+    private func placeholder(for field: NSTextField) -> String {
+        if field === versionField {
+            return WuwaPlaceholders.version
+        }
+        if field === volumeField {
+            return WuwaPlaceholders.volumeName
+        }
+        if field === externalRootField {
+            return WuwaPlaceholders.externalRoot
+        }
+        if field === containerField {
+            return WuwaPlaceholders.appContainerID
+        }
+        if field === appPathField {
+            return WuwaPlaceholders.appPath
+        }
+        return ""
+    }
+
     private func updateMutationButtons() {
         let enabled = closedCheckBox.state == .on
         actionButtons.forEach { $0.isEnabled = enabled }
@@ -157,6 +193,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func fieldChanged(_ sender: Any) {
         refreshPathPreview()
+        saveCurrentConfigIfValid()
+    }
+
+    func controlTextDidChange(_ obj: Notification) {
+        refreshPathPreview()
+        saveCurrentConfigIfValid()
     }
 
     @objc private func checkBoxChanged(_ sender: Any) {
@@ -170,10 +212,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    @objc private func runRecommended() {
+        guard mutationIsConfirmed() else { return }
+        runOperation("1 推薦：Codesign + 連結版本") { config in
+            try WuwaMover().createRecommendedSetup(config: config, administratorPrivileges: true).text
+        }
+    }
+
+    @objc private func linkWholeClient() {
+        guard mutationIsConfirmed() else { return }
+        runOperation("2 整個 Client symlink") { config in
+            try WuwaMover().createClientSymlink(config: config).text
+        }
+    }
+
     @objc private func createSymlinks() {
         guard mutationIsConfirmed() else { return }
-        runOperation("建立 / 更新 symlink") { config in
-            try WuwaMover().createOrUpdateSymlinks(config: config).text
+        runOperation("3 保守雙路徑") { config in
+            try WuwaMover().createConservativeFallbackSymlinks(config: config).text
         }
     }
 
@@ -216,8 +272,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let config = try currentConfig()
             pathPreview.stringValue = """
             外接目標：\(config.externalTarget)
-            入口 1：\(config.source1)
-            入口 2：\(config.source2)
+            外接 Client：\(config.externalClient)
+            Container 入口：\(config.source1)
+            使用者 Library 版本入口：\(config.source2)
+            使用者 Library Client：\(config.userClient)
             """
         } catch {
             pathPreview.stringValue = error.localizedDescription
@@ -236,6 +294,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let config: WuwaConfig
         do {
             config = try currentConfig()
+            try settingsStore.save(config.storedSettings)
         } catch {
             showError(error)
             return
@@ -265,6 +324,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
+    }
+
+    private func saveCurrentConfigIfValid() {
+        guard let config = try? currentConfig() else { return }
+        try? settingsStore.save(config.storedSettings)
     }
 
     private func setControlsEnabled(_ enabled: Bool) {
