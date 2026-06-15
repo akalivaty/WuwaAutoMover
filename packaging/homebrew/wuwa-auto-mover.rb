@@ -1,7 +1,7 @@
 class WuwaAutoMover < Formula
   desc "Move Wuthering Waves macOS resources to an external disk"
-  homepage "https://github.com/OWNER/REPO"
-  url "https://github.com/OWNER/REPO/archive/refs/tags/v0.1.0.tar.gz"
+  homepage "https://github.com/akalivaty/WuwaAutoMover"
+  url "https://github.com/akalivaty/WuwaAutoMover/archive/refs/tags/v0.1.0.tar.gz"
   sha256 "REPLACE_WITH_SOURCE_TARBALL_SHA256"
   license "MIT"
 

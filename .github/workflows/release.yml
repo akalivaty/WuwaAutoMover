@@ -1,0 +1,143 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout WuwaAutoMover
+        uses: actions/checkout@v4
+
+      - name: Extract version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "zip_name=WuwaAutoMover-${version}.zip" >> "$GITHUB_OUTPUT"
+
+      - name: Build app and CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/build_wuwa_auto_mover.sh
+
+      - name: Package app
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          zip_path="build/${{ steps.version.outputs.zip_name }}"
+          ditto -c -k --sequesterRsrc --keepParent "build/WuwaAutoMover.app" "${zip_path}"
+          zip_sha="$(shasum -a 256 "${zip_path}" | awk '{print $1}')"
+          echo "zip_path=${zip_path}" >> "$GITHUB_OUTPUT"
+          echo "zip_sha=${zip_sha}" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ steps.version.outputs.tag }}"
+          zip_path="${{ steps.package.outputs.zip_path }}"
+
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            gh release upload "${tag}" "${zip_path}" --clobber
+          else
+            gh release create "${tag}" "${zip_path}" \
+              --title "${tag}" \
+              --notes "WuwaAutoMover ${tag}"
+          fi
+
+      - name: Download source archive and compute SHA256
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_url="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${{ steps.version.outputs.tag }}.tar.gz"
+          curl -L "${source_url}" -o source.tar.gz
+          source_sha="$(shasum -a 256 source.tar.gz | awk '{print $1}')"
+          echo "source_url=${source_url}" >> "$GITHUB_OUTPUT"
+          echo "source_sha=${source_sha}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout Homebrew tap
+        uses: actions/checkout@v4
+        with:
+          repository: akalivaty/homebrew-apps
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-apps
+
+      - name: Update Homebrew cask and formula
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+          ZIP_SHA: ${{ steps.package.outputs.zip_sha }}
+          SOURCE_URL: ${{ steps.source.outputs.source_url }}
+          SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cask_path="homebrew-apps/Casks/wuwa-auto-mover.rb"
+          formula_path="homebrew-apps/Formula/wuwa-auto-mover.rb"
+
+          mkdir -p "$(dirname "${cask_path}")" "$(dirname "${formula_path}")"
+
+          if [[ ! -f "${cask_path}" ]]; then
+            cp "packaging/homebrew/wuwa-auto-mover-cask.rb" "${cask_path}"
+          fi
+
+          if [[ ! -f "${formula_path}" ]]; then
+            cp "packaging/homebrew/wuwa-auto-mover.rb" "${formula_path}"
+          fi
+
+          ruby <<'RUBY'
+          cask_path = "homebrew-apps/Casks/wuwa-auto-mover.rb"
+          formula_path = "homebrew-apps/Formula/wuwa-auto-mover.rb"
+
+          version = ENV.fetch("VERSION")
+          zip_sha = ENV.fetch("ZIP_SHA")
+          source_url = ENV.fetch("SOURCE_URL")
+          source_sha = ENV.fetch("SOURCE_SHA")
+          repo = ENV.fetch("REPO")
+
+          cask = File.read(cask_path)
+          cask.gsub!(/version\s+"[^"]+"/, %(version "#{version}"))
+          cask.gsub!(/sha256\s+"[^"]+"/, %(sha256 "#{zip_sha}"))
+          cask.gsub!(/url\s+"[^"]+"/, %(url "https://github.com/#{repo}/releases/download/v\#{version}/WuwaAutoMover-\#{version}.zip"))
+          cask.gsub!(/homepage\s+"[^"]+"/, %(homepage "https://github.com/#{repo}"))
+          File.write(cask_path, cask)
+
+          formula = File.read(formula_path)
+          formula.gsub!(/homepage\s+"[^"]+"/, %(homepage "https://github.com/#{repo}"))
+          formula.gsub!(/url\s+"[^"]+"/, %(url "#{source_url}"))
+          formula.gsub!(/sha256\s+"[^"]+"/, %(sha256 "#{source_sha}"))
+          File.write(formula_path, formula)
+          RUBY
+
+      - name: Commit Homebrew tap update
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd homebrew-apps
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Casks/wuwa-auto-mover.rb Formula/wuwa-auto-mover.rb
+          if git diff --cached --quiet; then
+            echo "Homebrew tap is already up to date."
+          else
+            git commit -m "Update WuwaAutoMover to ${{ steps.version.outputs.tag }}"
+            git push
+          fi

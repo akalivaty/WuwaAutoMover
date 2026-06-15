@@ -17,7 +17,7 @@ Settings are saved after you enter them, so you do not need to retype your volum
 After publishing the cask to a tap:
 
 ```shell
-brew tap OWNER/REPO
+brew tap akalivaty/homebrew-apps
 brew install --cask wuwa-auto-mover
 ```
 
@@ -37,7 +37,7 @@ The cask installs:
 After publishing the formula to a tap:
 
 ```shell
-brew tap OWNER/REPO
+brew tap akalivaty/homebrew-apps
 brew install wuwa-auto-mover
 ```
 
@@ -195,6 +195,51 @@ wuwa-auto-mover unlink --yes
 
 Options passed to any command override saved settings and are saved for future runs.
 
+## Release Automation
+
+This repository includes a GitHub Actions workflow at:
+
+```text
+.github/workflows/release.yml
+```
+
+After adding the `HOMEBREW_TAP_TOKEN` repository secret, the release flow is:
+
+1. Commit and push your WuwaAutoMover changes.
+2. Create and push a version tag, for example `v1.0.0`.
+3. GitHub Actions builds `WuwaAutoMover.app` and the CLI on `macos-latest`.
+4. The workflow zips `WuwaAutoMover.app` as `WuwaAutoMover-<version>.zip`.
+5. The workflow creates or updates the GitHub Release for that tag.
+6. The workflow calculates SHA256 for the app zip and source tarball.
+7. The workflow checks out `akalivaty/homebrew-apps`.
+8. The workflow updates:
+   - `Casks/wuwa-auto-mover.rb`
+   - `Formula/wuwa-auto-mover.rb`
+9. The workflow commits and pushes the tap update.
+
+Create a release:
+
+```shell
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+The tag name must start with `v`. The Homebrew version will be the tag without `v`, so `v1.0.0` becomes `version "1.0.0"`.
+
+The tap repository must allow the token stored in `HOMEBREW_TAP_TOKEN` to push to `akalivaty/homebrew-apps`.
+
+Expected tap paths:
+
+```text
+homebrew-apps/
+├── Casks/
+│   └── wuwa-auto-mover.rb
+└── Formula/
+    └── wuwa-auto-mover.rb
+```
+
+If either file does not exist yet, the workflow copies the template from `packaging/homebrew/` and then updates it.
+
 ## Homebrew Templates
 
 Templates are under `packaging/homebrew/`:
@@ -202,4 +247,4 @@ Templates are under `packaging/homebrew/`:
 - `wuwa-auto-mover.rb`: formula for the CLI
 - `wuwa-auto-mover-cask.rb`: cask for `WuwaAutoMover.app`, including the `wuwa-auto-mover` binary symlink from the app bundle
 
-Before publishing, replace `OWNER/REPO` and the placeholder `sha256` values with the real release URL and checksums.
+The workflow replaces the placeholder `sha256` values during release.
