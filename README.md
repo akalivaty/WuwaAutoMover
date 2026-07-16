@@ -1,8 +1,6 @@
-# WuwaAutoMover (Work in progress, not released yet)
+# WuwaAutoMover
 
-![WuwaAutoMover GUI](./assets/gui_preview.png)
-
-WuwaAutoMover is a native macOS GUI app and command line tool for moving Wuthering Waves resource data to an external disk.
+WuwaAutoMover is a native macOS GUI app for moving Wuthering Waves resource data to an external disk.
 
 You can refer to this [repo](https://github.com/akalivaty/move_wuwa_to_extenal_disk_on_mac) and this tool will practice this process automatically.
 
@@ -12,44 +10,13 @@ It supports the three workflows described in the root README:
 2. **Second choice**: link the whole `~/Library/Client` folder to the external disk.
 3. **Conservative fallback**: link both the sandbox container resource path and the `~/Library/Client` resource path.
 
-Settings are saved after you enter them, so you do not need to retype your volume and paths every time.
+Settings are saved after you enter them, so you do not need to retype your paths every time.
 
 ## Install
 
-### GUI App With Homebrew Cask
+Download the latest DMG from GitHub Releases, open it, and drag `WuwaAutoMover.app` to the Applications shortcut.
 
-After publishing the cask to a tap:
-
-```shell
-brew tap akalivaty/homebrew-apps
-brew install --cask wuwa-auto-mover
-```
-
-For local testing from this repository:
-
-```shell
-brew install --cask ./packaging/homebrew/wuwa-auto-mover-cask.rb
-```
-
-The cask installs:
-
-- `WuwaAutoMover.app`
-- `wuwa-auto-mover` CLI symlink from the app bundle
-
-### CLI With Homebrew Formula
-
-After publishing the formula to a tap:
-
-```shell
-brew tap akalivaty/homebrew-apps
-brew install wuwa-auto-mover
-```
-
-For local testing from this repository:
-
-```shell
-brew install ./packaging/homebrew/wuwa-auto-mover.rb
-```
+WuwaAutoMover is ad-hoc signed and is not notarized because this project does not use an Apple Developer membership. On first launch, macOS may require opening the app from Finder with Control-click, `Open`, then confirming again.
 
 ### Build From Source
 
@@ -59,145 +26,70 @@ From `WuwaAutoMover/`:
 swift build -c release
 ```
 
-From the repo root, to package both outputs:
+To package the app and a downloadable DMG:
 
 ```shell
-./WuwaAutoMover/scripts/build_wuwa_auto_mover.sh
+./scripts/build_wuwa_auto_mover.sh
+./scripts/create_dmg.sh
 ```
+
+The build script copies the release executable into the app bundle, verifies its signature, and then removes `.build/release` and its underlying SwiftPM release directory. The DMG script reads only `build/WuwaAutoMover.app`, so it can run immediately afterward without the Swift build artifacts.
 
 Outputs:
 
-- `WuwaAutoMover/build/WuwaAutoMover.app`
-- `WuwaAutoMover/build/wuwa-auto-mover`
+- `build/WuwaAutoMover.app`
+- `build/WuwaAutoMover-<version>.dmg`
 
 Open the GUI:
 
 ```shell
-open WuwaAutoMover/build/WuwaAutoMover.app
+open build/WuwaAutoMover.app
 ```
+
+The DMG script uses `ditto` to preserve the complete app bundle, then adds an `/Applications` symlink and installation notes. Builds are ad-hoc signed.
 
 ## GUI Usage
 
 Fill in your own values. The text shown in the fields is only a placeholder example, not a default.
 
+On the first launch, choose English or Traditional Chinese. WuwaAutoMover saves this preference and uses it on future launches.
+
 Required settings:
 
 - Resource version, for example `3.4.0`
-- External volume name under `/Volumes`, for example `T7`
-- External root folder under that volume, for example `WuwaData`
+- External destination folder under `/Volumes`, for example `/Volumes/T7/WuwaData`. The GUI obtains the volume name from this path automatically.
 - App container ID, for example `com.kurogame.wutheringwaves.global`
 - Absolute path to `WutheringWaves.app`, for example `/Volumes/T7/Applications/WutheringWaves.app`
 
-The GUI has three main actions:
+Follow the guided order in the GUI:
 
-- `1 推薦：Codesign + 連結版本`
-- `2 整個 Client symlink`
-- `3 保守雙路徑`
+1. Enter the resource version and select the external destination folder and game app. Selected paths are written into the text fields and saved automatically.
+2. Click `Check Now` / `開始檢查`. This is the first action to run each time the app starts. If either local `Resources` folder contains visible entries other than the current version, the app lists them and asks whether to delete all of them, including `Video`. For stale symlinks, the linked data under the configured external `Resources` folder is deleted too.
+3. Close Wuthering Waves, Launcher, App Store, and downloader processes, tick the confirmation checkbox, then run workflow A.
 
-Before running any action that changes files, fully close Wuthering Waves, Launcher, App Store, and active downloader processes, then tick the confirmation checkbox.
+Codesigning the game app can take several minutes. While it runs, the GUI shows an activity indicator and a message asking you to keep WuwaAutoMover open.
 
-## CLI Usage
+Press `Command-Q` or click the window's red close button to quit WuwaAutoMover. If an operation is still running, the app asks for confirmation before quitting.
 
-Show help:
+Workflow B and C are fallbacks for cases where workflow A does not work. Workflow buttons remain clickable and show the missing prerequisite when status check or shutdown confirmation has not been completed.
 
-```shell
-wuwa-auto-mover --help
-```
+## Automatic Updates
 
-Save settings first:
+WuwaAutoMover embeds Sparkle 2 and uses signed GitHub Release assets:
 
-```shell
-wuwa-auto-mover config \
-  --version 3.4.0 \
-  --volume T7 \
-  --external-root WuwaData \
-  --container-id com.kurogame.wutheringwaves.global \
-  --app-path "/Volumes/T7/Applications/WutheringWaves.app"
-```
+- The app checks for updates automatically once per day.
+- Automatic download and installation are enabled by default.
+- Use `WuwaAutoMover` > `Check for Updates...` / `檢查更新...` to check manually.
+- Update archives and the appcast are verified with the project's Sparkle EdDSA key.
+- If a file operation is running when Sparkle requests a relaunch, WuwaAutoMover's existing quit confirmation prevents an accidental interruption.
 
-These examples are placeholders. Use your own volume name and paths.
-
-Saved settings are stored at:
+The fixed update feed is:
 
 ```text
-~/Library/Application Support/WuwaAutoMover/config.json
+https://github.com/akalivaty/WuwaAutoMover/releases/latest/download/appcast.xml
 ```
 
-After settings are saved, later commands can omit those options unless you want to override them.
-
-### Option 1: Recommended
-
-Codesign the app, then link only:
-
-```text
-~/Library/Client/Saved/Resources/<version>
-```
-
-Run:
-
-```shell
-wuwa-auto-mover recommended --yes --admin
-```
-
-Use `--admin` if codesign needs a macOS administrator prompt.
-
-### Option 2: Whole Client Symlink
-
-Link the whole `~/Library/Client` folder:
-
-```shell
-wuwa-auto-mover link-client --yes
-```
-
-This is convenient after the app has been re-signed and is no longer sandboxed, but it moves more than just downloaded resources.
-
-### Option 3: Conservative Fallback
-
-Link both possible resource version paths:
-
-```shell
-wuwa-auto-mover fallback-link --yes
-```
-
-Use this if the app still has the sandbox entitlement, you already launched the game before codesigning, or you are unsure which path the game is currently using.
-
-### Other Commands
-
-Check current paths:
-
-```shell
-wuwa-auto-mover status
-```
-
-Only codesign the app:
-
-```shell
-wuwa-auto-mover codesign --admin
-```
-
-Inspect app entitlements:
-
-```shell
-wuwa-auto-mover entitlements
-```
-
-Remove symlinks without deleting external data:
-
-```shell
-wuwa-auto-mover unlink --yes
-```
-
-## CLI Options
-
-- `--version <value>`: resource version, for example `3.4.0`
-- `--volume <name>`: external volume name under `/Volumes`, for example `T7`
-- `--external-root <path>`: folder under the external volume, for example `WuwaData`
-- `--container-id <id>`: App Store container ID, for example `com.kurogame.wutheringwaves.global`
-- `--app-path <path>`: absolute path to `WutheringWaves.app`
-- `--yes`: required for operations that change local symlinks or folders
-- `--admin`: use macOS administrator prompt for codesign
-
-Options passed to any command override saved settings and are saved for future runs.
+The Sparkle private key is stored in the local macOS Keychain under account `dev.yuva.WuwaAutoMover`. Never commit or upload the private key as a repository file. Because there is no Developer ID fallback, losing both the Keychain key and the GitHub secret prevents existing installations from trusting future updates.
 
 ## Release Automation
 
@@ -207,19 +99,28 @@ This repository includes a GitHub Actions workflow at:
 .github/workflows/release.yml
 ```
 
-After adding the `HOMEBREW_TAP_TOKEN` repository secret, the release flow is:
+Before the first release, export the existing private key to a temporary file:
+
+```shell
+.build/artifacts/sparkle/Sparkle/bin/generate_keys \
+  --account dev.yuva.WuwaAutoMover \
+  -x /tmp/WuwaAutoMover-sparkle-private-key
+```
+
+In GitHub, open `Settings` > `Secrets and variables` > `Actions`, create the repository secret `SPARKLE_PRIVATE_KEY`, and use the complete temporary file contents as its value. Delete the temporary file immediately afterward:
+
+```shell
+rm -f /tmp/WuwaAutoMover-sparkle-private-key
+```
+
+The release flow is:
 
 1. Commit and push your WuwaAutoMover changes.
 2. Create and push a version tag, for example `v1.0.0`.
-3. GitHub Actions builds `WuwaAutoMover.app` and the CLI on `macos-latest`.
-4. The workflow zips `WuwaAutoMover.app` as `WuwaAutoMover-<version>.zip`.
-5. The workflow creates or updates the GitHub Release for that tag.
-6. The workflow calculates SHA256 for the app zip and source tarball.
-7. The workflow checks out `akalivaty/homebrew-apps`.
-8. The workflow updates:
-   - `Casks/wuwa-auto-mover.rb`
-   - `Formula/wuwa-auto-mover.rb`
-9. The workflow commits and pushes the tap update.
+3. GitHub Actions builds `WuwaAutoMover.app` on `macos-latest`.
+4. The workflow packages `WuwaAutoMover.app` as `WuwaAutoMover-<version>.dmg`.
+5. Sparkle signs the DMG and `appcast.xml` with `SPARKLE_PRIVATE_KEY`.
+6. The workflow creates or updates the GitHub Release and uploads both files.
 
 Create a release:
 
@@ -228,27 +129,4 @@ git tag v1.0.0
 git push origin v1.0.0
 ```
 
-The tag name must start with `v`. The Homebrew version will be the tag without `v`, so `v1.0.0` becomes `version "1.0.0"`.
-
-The tap repository must allow the token stored in `HOMEBREW_TAP_TOKEN` to push to `akalivaty/homebrew-apps`.
-
-Expected tap paths:
-
-```text
-homebrew-apps/
-├── Casks/
-│   └── wuwa-auto-mover.rb
-└── Formula/
-    └── wuwa-auto-mover.rb
-```
-
-If either file does not exist yet, the workflow copies the template from `packaging/homebrew/` and then updates it.
-
-## Homebrew Templates
-
-Templates are under `packaging/homebrew/`:
-
-- `wuwa-auto-mover.rb`: formula for the CLI
-- `wuwa-auto-mover-cask.rb`: cask for `WuwaAutoMover.app`, including the `wuwa-auto-mover` binary symlink from the app bundle
-
-The workflow replaces the placeholder `sha256` values during release.
+The tag name must start with `v`; for example, `v1.0.0` produces `WuwaAutoMover-1.0.0.dmg`. Each release also receives a monotonically increasing `CFBundleVersion` from `github.run_number`, which Sparkle uses for update comparison.

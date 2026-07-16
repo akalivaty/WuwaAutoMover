@@ -9,17 +9,25 @@ let package = Package(
     ],
     products: [
         .library(name: "WuwaAutoMoverCore", targets: ["WuwaAutoMoverCore"]),
-        .executable(name: "wuwa-auto-mover", targets: ["wuwa-auto-mover"]),
         .executable(name: "WuwaAutoMoverGUI", targets: ["WuwaAutoMoverGUI"])
+    ],
+    dependencies: [
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.9.2")
     ],
     targets: [
         .target(name: "WuwaAutoMoverCore"),
         .executableTarget(
-            name: "wuwa-auto-mover",
-            dependencies: ["WuwaAutoMoverCore"]
-        ),
-        .executableTarget(
             name: "WuwaAutoMoverGUI",
+            dependencies: [
+                "WuwaAutoMoverCore",
+                .product(name: "Sparkle", package: "Sparkle")
+            ],
+            linkerSettings: [
+                .unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])
+            ]
+        ),
+        .testTarget(
+            name: "WuwaAutoMoverCoreTests",
             dependencies: ["WuwaAutoMoverCore"]
         )
     ]
